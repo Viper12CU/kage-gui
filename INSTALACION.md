@@ -87,7 +87,7 @@ Primera prueba sugerida:
    «Máx. páginas» = 5 y pulsa **Clonar**.
 2. Al terminar, pestaña **Biblioteca**: verás la card de example.com con
    su preview; selecciónala y pulsa **Ver** para navegar el clon offline.
-3. Pestaña **Sistema** → **Buscar actualizaciones**: debe decir que
+3. Pestaña **Preferencias** → **Buscar actualizaciones**: debe decir que
    estás al día.
 
 Nota: en el primer clon, si no tienes Chrome/Chromium instalado, kage
@@ -114,7 +114,7 @@ cp kage-gui.desktop ~/.local/share/applications/
 | Síntoma | Causa y arreglo |
 |---|---|
 | `ModuleNotFoundError: No module named 'gi'` | El venv se creó sin `--system-site-packages`, o falta el paso 2. Borra `.venv` y repite el paso 4. |
-| La app abre pero avisa «sin kage» | Falta el paso 3, o instalaste kage en una ruta fuera del PATH. Usa el diálogo de instalación de la propia app (pestaña Sistema → «Instalar kage…»). |
+| La app abre pero avisa «sin kage» | Falta el paso 3, o instalaste kage en una ruta fuera del PATH. Usa el diálogo de instalación de la propia app (pestaña Preferencias → «Instalar kage…»). |
 | El primer clon tarda mucho | Está descargando Chromium (~150 MB). Es solo la primera vez. |
 | `kage clone` falla con un sitio concreto | Revisa el registro de la pestaña Clonar: ahí sale el error de kage tal cual (red, robots.txt, timeout…). |
 | La ventana se ve con tema raro | En Preferencias elige tema Claro u Oscuro explícito. |

@@ -21,15 +21,14 @@ ejecuta con `subprocess`, mostrando progreso y registro en vivo.
   un puerto libre y abre el navegador), **Empaquetar ZIM / binario / App**
   (`kage pack`), abrir la carpeta y eliminar.
 - **Abrir ZIM**: elige un `.zim` y lo sirve con `kage open` para leerlo.
-- **Sistema**: versión de kage instalada y su ruta, Chrome detectado, y
-  **Buscar actualizaciones** (consulta la última release en GitHub y dice
-  si estás al día, con enlaces a la release y al `.deb`).
-- **Preferencias**: agrupa la configuración y los accesos — selector de
-  tema, la carpeta de destino de los clones con botón para **abrirla en
-  el explorador** (también hay botón en la barra de la Biblioteca y junto
-  al campo «Guardar en» de Clonar), abrir la carpeta de configuración, y
-  enlaces a la documentación oficial de kage, su repositorio, las
-  releases y los issues.
+- **Preferencias** (incluye lo que antes era Sistema): versión de kage
+  instalada y su ruta, Chrome detectado, **Buscar actualizaciones**
+  (consulta la última release en GitHub y dice si estás al día, con
+  enlaces a la release y al `.deb`), selector de tema, accesos a los
+  datos de la app (configuración y caché de previews) y enlaces a la
+  documentación oficial de kage, su repositorio, las releases y los
+  issues. La carpeta de destino de los clones se abre desde la
+  Biblioteca (o junto al campo «Guardar en» de Clonar), no desde aquí.
 
 ## Primera vez y tema
 

@@ -55,11 +55,32 @@ def open_folder(path: str) -> bool:
 
 
 def apply_theme(mode: str) -> None:
+    """Aplica el tema pedido, en GTK nuevo y en GTK clásico.
+
+    GTK >= 4.20 (Ubuntu 26.04) introdujo `gtk-interface-color-scheme` y
+    la propiedad clásica `gtk-application-prefer-dark-theme` pasó a ser
+    un alias heredado que el portal de escritorio puede pisar: fijarla
+    ya no cambia el tema. Por eso se usa la propiedad moderna cuando
+    existe y la clásica solo en GTK anteriores.
+    """
     settings = Gtk.Settings.get_default()
-    if settings is not None:
-        # "dark" fuerza oscuro; "light" y "system" dejan el valor por
-        # defecto de GTK (el escritorio manda a través de sus ajustes).
-        settings.set_property("gtk-application-prefer-dark-theme", mode == "dark")
+    if settings is None:
+        return
+    prop_names = {prop.name for prop in settings.list_properties()}
+    if "gtk-interface-color-scheme" in prop_names and \
+            hasattr(Gtk, "InterfaceColorScheme"):
+        scheme = {
+            "system": Gtk.InterfaceColorScheme.DEFAULT,
+            "light": Gtk.InterfaceColorScheme.PREFER_LIGHT,
+            "dark": Gtk.InterfaceColorScheme.PREFER_DARK,
+        }[mode]
+        settings.set_property("gtk-interface-color-scheme", scheme)
+        # Mantener el alias clásico en el mismo valor por coherencia.
+        settings.set_property(
+            "gtk-application-prefer-dark-theme", mode == "dark")
+    else:
+        settings.set_property(
+            "gtk-application-prefer-dark-theme", mode == "dark")
 
 
 def _label(text: str, bold: bool = False) -> Gtk.Label:
@@ -760,10 +781,17 @@ class OpenZimPage(Gtk.Box):
 
 
 # ---------------------------------------------------------------------------
-# Vista: Sistema (versión instalada y actualizaciones)
+# Vista: Preferencias (sistema, configuración y accesos en una sola vista)
 # ---------------------------------------------------------------------------
 
-class SistemaPage(Gtk.Box):
+class PreferencesPage(Gtk.Box):
+    """Todo lo de la antigua Sistema + Preferencias, en una sola vista:
+
+    estado de kage y actualizaciones, apariencia, datos de la app y
+    enlaces a la documentación y el proyecto. La carpeta de destino de
+    los clones no vive aquí: se abre desde la Biblioteca.
+    """
+
     def __init__(self, window: "MainWindow") -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         self._window = window
@@ -773,6 +801,7 @@ class SistemaPage(Gtk.Box):
         self.set_margin_end(16)
         self._release: updates.ReleaseInfo | None = None
 
+        # -- kage: estado y actualizaciones ----------------------------------
         self.append(_label("kage", bold=True))
         self._installed = Gtk.Label(label="", xalign=0, selectable=True)
         self.append(self._installed)
@@ -808,6 +837,49 @@ class SistemaPage(Gtk.Box):
             label="Si instalaste kage con apt, actualizar es simplemente:\n"
                   "sudo apt update && sudo apt upgrade kage",
             xalign=0, selectable=True))
+
+        # -- apariencia --------------------------------------------------------
+        self.append(_label("Apariencia", bold=True))
+        self.theme_dropdown = Gtk.DropDown.new_from_strings(list(_THEME_LABELS))
+        self.theme_dropdown.set_selected(
+            _THEME_ORDER.index(window._cfg["theme"]))
+        self.theme_dropdown.connect("notify::selected", window._on_theme_changed)
+        self.append(_row("Tema", self.theme_dropdown))
+
+        # -- datos de la app ---------------------------------------------------
+        self.append(_label("Datos de la app", bold=True))
+        data_buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        open_config = Gtk.Button(label="Abrir carpeta de configuración")
+        open_config.connect(
+            "clicked",
+            lambda *_: open_folder(os.path.dirname(config.config_path())))
+        data_buttons.append(open_config)
+        open_thumbs = Gtk.Button(label="Abrir caché de previews")
+        open_thumbs.connect(
+            "clicked", lambda *_: open_folder(previews.thumbs_dir()))
+        data_buttons.append(open_thumbs)
+        self.append(data_buttons)
+
+        # -- documentación y proyecto ------------------------------------------
+        self.append(_label("Documentación y proyecto kage", bold=True))
+        links = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        for text, url in (
+            ("Documentación oficial de kage", updates.DOCS_URL),
+            ("Repositorio en GitHub", updates.REPO_URL),
+            ("Releases y descargas", updates.RELEASES_URL),
+            ("Issues (problemas y sugerencias)", updates.ISSUES_URL),
+        ):
+            btn = Gtk.Button(label=f"{text}  —  {url}")
+            btn.set_halign(Gtk.Align.START)
+            btn.connect("clicked", lambda *_b, u=url: webbrowser.open(u))
+            links.append(btn)
+        self.append(links)
+
+        self.refresh_status()
+
+    # -- estado de kage --------------------------------------------------------
+
+    def refresh(self) -> None:
         self.refresh_status()
 
     def refresh_status(self) -> None:
@@ -822,6 +894,8 @@ class SistemaPage(Gtk.Box):
         chrome = previews.find_chrome_binary()
         self._chrome.set_text(
             f"Chrome/Chromium para clonar y previews: {chrome or 'no encontrado (kage descargará uno al primer clone)'}")
+
+    # -- actualizaciones ---------------------------------------------------------
 
     def _check(self, _btn) -> None:
         self._btn_check.set_sensitive(False)
@@ -860,72 +934,6 @@ class SistemaPage(Gtk.Box):
             self._update_status.set_text(
                 f"Estás al día: kage {installed} es la última versión "
                 f"({release.tag}).")
-
-
-# ---------------------------------------------------------------------------
-# Vista: Preferencias (configuración y accesos del proyecto)
-# ---------------------------------------------------------------------------
-
-class PreferencesPage(Gtk.Box):
-    """Agrupa la configuración de la app y los accesos a kage (docs/repo)."""
-
-    def __init__(self, window: "MainWindow") -> None:
-        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=14)
-        self._window = window
-        self.set_margin_top(16)
-        self.set_margin_bottom(16)
-        self.set_margin_start(16)
-        self.set_margin_end(16)
-
-        self.append(_label("Apariencia", bold=True))
-        self.theme_dropdown = Gtk.DropDown.new_from_strings(list(_THEME_LABELS))
-        self.theme_dropdown.set_selected(
-            _THEME_ORDER.index(window._cfg["theme"]))
-        self.theme_dropdown.connect("notify::selected", window._on_theme_changed)
-        self.append(_row("Tema", self.theme_dropdown))
-
-        self.append(_label("Carpeta de destino", bold=True))
-        self._root_label = Gtk.Label(label="", xalign=0, selectable=True)
-        self.append(self._root_label)
-        dest_buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        open_dest = Gtk.Button(label="Abrir carpeta de destino")
-        open_dest.connect("clicked", self._open_destination)
-        dest_buttons.append(open_dest)
-        open_config = Gtk.Button(label="Abrir carpeta de configuración")
-        open_config.connect(
-            "clicked",
-            lambda *_: open_folder(os.path.dirname(config.config_path())))
-        dest_buttons.append(open_config)
-        self.append(dest_buttons)
-
-        self.append(_label("Documentación y proyecto kage", bold=True))
-        links = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        for text, url in (
-            ("Documentación oficial de kage", updates.DOCS_URL),
-            ("Repositorio en GitHub", updates.REPO_URL),
-            ("Releases y descargas", updates.RELEASES_URL),
-            ("Issues (problemas y sugerencias)", updates.ISSUES_URL),
-        ):
-            btn = Gtk.Button(label=f"{text}  —  {url}")
-            btn.set_halign(Gtk.Align.START)
-            btn.connect("clicked", lambda *_b, u=url: webbrowser.open(u))
-            links.append(btn)
-        self.append(links)
-
-        self._status = Gtk.Label(label="", xalign=0)
-        self.append(self._status)
-        self.refresh()
-
-    def refresh(self) -> None:
-        self._root_label.set_text(
-            f"Las páginas clonadas quedan en: {self._window.out_root()}")
-
-    def _open_destination(self, _btn) -> None:
-        root = self._window.out_root()
-        if open_folder(root):
-            self._status.set_text(f"Abriendo {root} en el explorador…")
-        else:
-            self._status.set_text(f"No se pudo abrir {root}.")
 
 
 # ---------------------------------------------------------------------------
@@ -989,7 +997,6 @@ class MainWindow(Gtk.ApplicationWindow):
         self._clone_page = ClonePage(self)
         self._library_page = LibraryPage(self)
         self._zim_page = OpenZimPage(self)
-        self._sistema_page = SistemaPage(self)
         self._prefs_page = PreferencesPage(self)
 
         stack = Gtk.Stack()
@@ -997,7 +1004,6 @@ class MainWindow(Gtk.ApplicationWindow):
         stack.add_titled(self._clone_page, "clone", "Clonar")
         stack.add_titled(self._library_page, "library", "Biblioteca")
         stack.add_titled(self._zim_page, "zim", "Abrir ZIM")
-        stack.add_titled(self._sistema_page, "sistema", "Sistema")
         stack.add_titled(self._prefs_page, "preferencias", "Preferencias")
         stack.connect("notify::visible-child",
                       lambda *_: self._prefs_page.refresh())
@@ -1018,7 +1024,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._banner = Gtk.InfoBar(message_type=Gtk.MessageType.WARNING)
         self._banner.set_show_close_button(True)
         banner_label = Gtk.Label(
-            label="No encuentro el binario «kage». Abre la pestaña Sistema "
+            label="No encuentro el binario «kage». Abre la pestaña Preferencias "
                   "para instalarlo desde aquí.")
         self._banner.add_child(banner_label)
         root.append(self._banner)
@@ -1059,7 +1065,7 @@ class MainWindow(Gtk.ApplicationWindow):
             self._syncing_theme = False
 
     def refresh_kage_status(self) -> str | None:
-        """Re-detecta kage y actualiza header, banner y pestaña Sistema."""
+        """Re-detecta kage y actualiza header, banner y pestaña Preferencias."""
         self.kage_bin = commands.find_kage()
         if self.kage_bin:
             version = commands.kage_version(self.kage_bin)
@@ -1068,7 +1074,7 @@ class MainWindow(Gtk.ApplicationWindow):
         else:
             self._version_label.set_text("sin kage")
             self._banner.set_visible(True)
-        self._sistema_page.refresh_status()
+        self._prefs_page.refresh_status()
         return self.kage_bin
 
     def out_root(self) -> str:
