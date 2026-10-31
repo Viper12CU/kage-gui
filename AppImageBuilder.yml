@@ -25,8 +25,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Versión de kage que se empaqueta DENTRO del AppImage.
-  KAGE_VERSION: "0.3.12"
   # Los runners no tienen FUSE: todo AppImage (appimagetool incluido)
   # se ejecuta extraído en vez de montado.
   APPIMAGE_EXTRACT_AND_RUN: "1"
@@ -49,28 +47,11 @@ jobs:
       - name: Tests de lógica (sin GTK)
         run: python3 -m unittest discover -s tests -v
 
-      - name: Descargar kage oficial (se empaqueta en el AppImage)
-        run: |
-          mkdir -p build
-          base="https://github.com/tamnd/kage/releases/download/v${KAGE_VERSION}"
-          file="kage_${KAGE_VERSION}_linux_amd64.tar.gz"
-          # 1) Descargar el binario oficial de kage y su lista de hashes.
-          curl -fL -o "build/$file" "$base/$file"
-          curl -fL -o "build/checksums.txt" "$base/checksums.txt"
-          # 2) Verificar la integridad comparando los dos hashes directamente.
-          #    (No se usa `sha256sum -c checksums.txt`: ese modo busca el
-          #    archivo por el nombre que trae la lista, y si el descargado se
-          #    llama distinto falla con "No such file or directory".)
-          expected="$(awk -v f="$file" '$2 == f {print $1}' build/checksums.txt)"
-          actual="$(sha256sum "build/$file" | cut -d' ' -f1)"
-          echo "sha256 esperado (checksums.txt): $expected"
-          echo "sha256 del archivo descargado:   $actual"
-          test -n "$expected" && test "$expected" = "$actual"
-          # 3) Extraer y dejar el binario listo en build/kage, que es lo que
-          #    la receta AppImageBuilder.yml copia dentro del AppImage.
-          tar xzf "build/$file" -C build
-          chmod +x build/kage
-          ./build/kage --version
+      # NOTA: el AppImage NO lleva kage dentro (decisión v4). La GUI usa el
+      # kage instalado en el sistema y, si no lo hay, ya ofrece instalarlo
+      # con su diálogo de instalación guiada. Ventajas: workflow más simple
+      # y robusto, AppImage más ligero y kage se actualiza por apt sin
+      # depender de que se recompublique la GUI.
 
       - name: Instalar appimage-builder y appimagetool
         run: |
@@ -81,7 +62,9 @@ jobs:
           python3 -m pip install "appimage-builder==1.1.0"
 
       - name: Construir el AppImage
-        run: appimage-builder --recipe AppImageBuilder.yml
+        run: |
+          echo "== MARCADOR workflow v4: AppImage SIN kage empaquetado =="
+          appimage-builder --recipe AppImageBuilder.yml
 
       - name: Smoke test (la ventana debe abrir y quedarse viva)
         run: |
@@ -109,3 +92,4 @@ jobs:
           generate_release_notes: true
           files: |
             kage-gui-*.AppImage
+
