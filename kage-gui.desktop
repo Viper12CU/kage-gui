@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Kage GUI
+Comment=Clona sitios web para leerlos offline (interfaz para kage)
+Exec=/home/fabian/kage-gui/run.sh
+Icon=web-browser
+Terminal=false
+Categories=Network;WebBrowser;Utility;
+Keywords=kage;offline;mirror;zim;kiwix;
