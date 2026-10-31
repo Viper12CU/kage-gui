@@ -2,7 +2,8 @@
 # Ver: https://appimage-builder.readthedocs.io
 #
 # Build local equivalente al de GitHub Actions:
-#   VERSION=0.4.0 appimage-builder --recipe AppImageBuilder.yml
+#   VERSION=1.0.0 appimage-builder --recipe AppImageBuilder.yml
+# El resultado se llama kage-gui-<versión>.AppImage (p. ej. kage-gui-1.0.0.AppImage).
 # (VERSION sale de kage_gui/__init__.py; en CI la exporta el workflow.)
 #
 # Base Ubuntu 22.04 (jammy) a propósito: es el denominador común más viejo
@@ -69,4 +70,4 @@ AppImage:
   arch: x86_64
   update-information: None
   sign-key: None
-  file_name: !ENV 'Kage_GUI-${VERSION}-x86_64.AppImage'
+  file_name: !ENV 'kage-gui-${VERSION}.AppImage'

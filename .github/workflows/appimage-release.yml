@@ -3,7 +3,8 @@ name: AppImage Release
 # Cada push a main: tests -> AppImage -> Release nuevo.
 #
 # Ojo con la estrategia de tags: como la versión de la app no cambia en
-# cada push, el tag lleva el nº de ejecución (v0.4.0-build7, v0.4.0-build8…)
+# cada push, el tag lleva el nº de ejecución (v1.0.0-build7, v1.0.0-build8…)
+# y el ejecutable se llama kage-gui-<versión>.AppImage (kage-gui-1.0.0.AppImage).
 # y el release se marca como "pre-release". Si prefieres releases solo
 # cuando tú lo decidas, cambia el disparador a tags:
 #   on:
@@ -73,7 +74,7 @@ jobs:
 
       - name: Smoke test (la ventana debe abrir y quedarse viva)
         run: |
-          appimage="$(ls Kage_GUI-*-x86_64.AppImage)"
+          appimage="$(ls kage-gui-*.AppImage)"
           chmod +x "$appimage"
           set +e
           timeout 15 xvfb-run -a "./$appimage" > smoke.log 2>&1
@@ -96,4 +97,4 @@ jobs:
           prerelease: true
           generate_release_notes: true
           files: |
-            Kage_GUI-*-x86_64.AppImage
+            kage-gui-*.AppImage

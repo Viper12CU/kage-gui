@@ -1,8 +1,24 @@
 # Instalación y prueba en tu máquina (Ubuntu)
 
-Guía paso a paso para dejar Kage GUI funcionando en tu Ubuntu.
-Tiempo estimado: 10 minutos (más la primera descarga de Chromium si no
-tienes Chrome, ~150 MB).
+Guía paso a paso para dejar Kage GUI **1.0.0** funcionando en tu Ubuntu.
+
+## 0. Vía rápida: el AppImage (sin instalar nada)
+
+Descarga `kage-gui-1.0.0.AppImage` del Release y:
+
+```bash
+chmod +x kage-gui-1.0.0.AppImage
+./kage-gui-1.0.0.AppImage
+```
+
+Trae dentro Python, GTK4 y kage: no necesitas los pasos 2 a 4. Si al
+ejecutarlo dice que falta FUSE, instala `libfuse2` (22.04) o
+`libfuse2t64` (24.04+) — o ejecútalo con `--appimage-extract-and-run`.
+El resto de esta guía (pasos 1 a 7) es la ruta desde el código fuente,
+para desarrollar o probar cambios.
+
+Tiempo estimado de la ruta desde código: 10 minutos (más la primera
+descarga de Chromium si no tienes Chrome, ~150 MB).
 
 ## 1. Descomprimir
 
