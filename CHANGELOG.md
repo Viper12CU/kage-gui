@@ -2,12 +2,16 @@
 
 ## Sin publicar
 
-- **CI**: appimage-builder se instala en un venv propio con
-  `packaging==21.3` fijado. Con el `packaging` moderno del runner
-  (>= 22) el deploy de apt moría con `InvalidVersion: '1.21.1ubuntu2'`,
-  porque appimage-builder compara versiones de paquetes .deb con
-  `packaging.version.parse()` y las versiones estilo Debian dejaron de
-  aceptarse como `LegacyVersion`.
+- **CI**: adiós a appimage-builder (sin mantenimiento desde 2022). El
+  AppImage se construye con `packaging/build-appimage.sh`: AppDir
+  armado a mano, cierre de `.deb` del apt del propio runner extraído
+  con `dpkg -x` y empaquetado con appimagetool. El workflow queda fino
+  y estable; toda la lógica vive en el script.
+- **AppImage**: ahora **sí trae kage dentro** (decisión de Fabian que
+  revierte la de la v4): el script descarga en cada build la **última**
+  release oficial de kage verificando su sha256 (fijable con
+  `KAGE_VERSION`), y el `AppRun` antepone `usr/bin` al `PATH` para que
+  la GUI use el kage empaquetado. Ejecutable autocontenido.
 
 ## 1.0.0 — 2026-10-31
 
