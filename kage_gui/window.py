@@ -1,10 +1,9 @@
-"""Interfaz GTK4 de Kage GUI.
+"""Interfaz GTK4 de Kage GUI (v2).
 
-Solo depende de GTK 4 (nada de libadwaita, para mantener la instalación
-simple). Toda la lógica de kage vive en commands.py / runner.py /
-library.py; aquí solo hay widgets y el pegamento con GLib: los callbacks
-del runner llegan desde un hilo lector y siempre vuelven al hilo
-principal con GLib.idle_add antes de tocar un widget.
+Solo depende de GTK 4. La lógica vive en commands.py / runner.py /
+library.py / config.py / updates.py / previews.py; aquí solo hay widgets
+y el pegamento con GLib: los callbacks que llegan desde hilos (runner,
+red, miniaturas) vuelven al hilo principal con GLib.idle_add.
 """
 
 from __future__ import annotations
@@ -12,23 +11,45 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import threading
 import webbrowser
+from datetime import datetime
 
 import gi
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
-from . import commands
+from . import commands, config, previews, updates
 from .commands import CloneOptions
 from .library import Mirror, free_port, scan_library
 from .runner import Counters, ProcessRunner
 
+_THEME_ORDER = ("system", "light", "dark")
+_THEME_LABELS = ("Sistema", "Claro", "Oscuro")
+
+_CSS = """
+.kage-card { border: 1px solid alpha(currentColor, 0.16); border-radius: 12px;
+             padding: 8px; }
+.kage-card-selected { background: alpha(#3584e4, 0.18);
+                      border: 1px solid #3584e4; border-radius: 12px;
+                      padding: 8px; }
+.kage-thumb { border-radius: 8px; background: alpha(currentColor, 0.06); }
+.mono { font-family: monospace; font-size: 0.92em; }
+"""
+
 
 def _idle(fn, *args):
-    """Programa fn(*args) en el hilo principal de GTK."""
     GLib.idle_add(fn, *args)
     return False
+
+
+def apply_theme(mode: str) -> None:
+    settings = Gtk.Settings.get_default()
+    if settings is not None:
+        # "dark" fuerza oscuro; "light" y "system" dejan el valor por
+        # defecto de GTK (el escritorio manda a través de sus ajustes).
+        settings.set_property("gtk-application-prefer-dark-theme", mode == "dark")
 
 
 def _label(text: str, bold: bool = False) -> Gtk.Label:
@@ -74,7 +95,7 @@ class ServerSession:
     def __init__(self) -> None:
         self.runner = ProcessRunner()
         self.url: str = ""
-        self.what: str = ""       # qué está sirviendo (ruta)
+        self.what: str = ""
         self.on_stopped = lambda: None
 
     @property
@@ -104,7 +125,95 @@ class ServerSession:
 
 
 # ---------------------------------------------------------------------------
-# Vista: Clonar
+# Diálogo de instalación de kage (primera vez / cuando falta el binario)
+# ---------------------------------------------------------------------------
+
+class SetupDialog(Gtk.Window):
+    def __init__(self, parent: "MainWindow") -> None:
+        super().__init__(title="Instalar kage", transient_for=parent, modal=True)
+        self.set_default_size(620, 520)
+        self._parent = parent
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        for widget, margin in ((box, 14),):
+            widget.set_margin_top(margin)
+            widget.set_margin_bottom(margin)
+            widget.set_margin_start(margin)
+            widget.set_margin_end(margin)
+
+        title = Gtk.Label(xalign=0)
+        title.set_markup("<b><big>Kage GUI necesita el programa «kage»</big></b>")
+        box.append(title)
+        box.append(Gtk.Label(
+            label="No se encontró el binario de kage en este equipo. Sin él la "
+                  "app no puede clonar ni servir sitios. Puedes instalarlo "
+                  "desde aquí o seguir las instrucciones manuales.",
+            xalign=0, wrap=True))
+
+        buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self._btn_install = Gtk.Button(label="Instalar automáticamente (apt)")
+        self._btn_install.add_css_class("suggested-action")
+        self._btn_install.connect("clicked", self._install)
+        buttons.append(self._btn_install)
+        releases = Gtk.Button(label="Abrir página de releases")
+        releases.connect("clicked", lambda *_: webbrowser.open(updates.RELEASES_URL))
+        buttons.append(releases)
+        recheck = Gtk.Button(label="Volver a comprobar")
+        recheck.connect("clicked", lambda *_: self._recheck())
+        buttons.append(recheck)
+        box.append(buttons)
+
+        expander = Gtk.Expander(label="Instrucciones manuales")
+        instructions = Gtk.Label(
+            label=updates.INSTALL_INSTRUCTIONS, xalign=0, selectable=True)
+        instructions.add_css_class("mono")
+        expander.set_child(instructions)
+        box.append(expander)
+
+        self._log = LogView()
+        self._log.set_min_content_height(130)
+        box.append(self._log)
+        self._status = Gtk.Label(label="", xalign=0)
+        box.append(self._status)
+        close = Gtk.Button(label="Cerrar")
+        close.connect("clicked", lambda *_: self.close())
+        box.append(close)
+        self.set_child(box)
+
+        self._runner = ProcessRunner(
+            on_line=lambda line: _idle(self._log.append_line, line),
+            on_exit=lambda code: _idle(self._install_done, code),
+        )
+
+    def _install(self, _btn) -> None:
+        if not shutil.which("pkexec"):
+            self._log.append_line(
+                "No hay «pkexec» en este sistema: usa las instrucciones manuales.")
+            return
+        self._btn_install.set_sensitive(False)
+        self._status.set_text("Instalando… (acepta el diálogo de contraseña)")
+        self._runner.start(["pkexec", "sh", "-c", updates.APT_INSTALL_SCRIPT])
+
+    def _install_done(self, code: int) -> None:
+        self._btn_install.set_sensitive(True)
+        if code == 0:
+            self._recheck(extra="Instalación terminada. ")
+        else:
+            self._status.set_text(
+                f"La instalación salió con código {code}. Revisa el registro "
+                "o prueba con las instrucciones manuales.")
+
+    def _recheck(self, extra: str = "") -> None:
+        found = self._parent.refresh_kage_status()
+        if found:
+            version = commands.kage_version(found)
+            self._status.set_text(f"{extra}kage detectado: {version} ({found})")
+        else:
+            self._status.set_text(extra + "kage sigue sin aparecer en el PATH.")
+
+
+# ---------------------------------------------------------------------------
+# Vista: Clonar (igual que en v1)
 # ---------------------------------------------------------------------------
 
 class ClonePage(Gtk.Box):
@@ -135,9 +244,8 @@ class ClonePage(Gtk.Box):
         self.append(_row("Guardar en", out_box))
 
         grid = Gtk.Grid(column_spacing=12, row_spacing=8)
-        spin_pages = Gtk.SpinButton.new_with_range(0, 100000, 1)
-        spin_pages.set_tooltip_text("0 = sin límite")
-        self._max_pages = spin_pages
+        self._max_pages = Gtk.SpinButton.new_with_range(0, 100000, 1)
+        self._max_pages.set_tooltip_text("0 = sin límite")
         self._max_depth = Gtk.SpinButton.new_with_range(0, 1000, 1)
         self._max_depth.set_tooltip_text("0 = sin límite")
         self._scope = Gtk.Entry(placeholder_text="/doc (opcional)")
@@ -200,8 +308,6 @@ class ClonePage(Gtk.Box):
         self._log = LogView()
         self.append(self._log)
 
-    # -- acciones -----------------------------------------------------------
-
     def _pick_out_dir(self, _btn) -> None:
         dialog = Gtk.FileDialog(title="Carpeta raíz para los mirrors")
         dialog.select_folder(self._window, None, self._on_out_picked)
@@ -210,7 +316,7 @@ class ClonePage(Gtk.Box):
         try:
             folder = dialog.select_folder_finish(result)
         except GLib.Error:
-            return  # usuario canceló
+            return
         if folder and folder.get_path():
             self._out.set_text(folder.get_path())
 
@@ -267,11 +373,10 @@ class ClonePage(Gtk.Box):
 
     def _launch(self, opts: CloneOptions) -> None:
         self._log.clear()
-        self._progress.pulse()
-        self._pulse_timer = GLib.timeout_add(120, self._pulse)
         self._status.set_text(f"Clonando {opts.url} …")
         self._btn_clone.set_sensitive(False)
         self._btn_cancel.set_sensitive(True)
+        GLib.timeout_add(120, self._pulse)
         cmd = commands.build_clone_command(self._window.kage_bin, opts)
         self._runner.start(cmd)
 
@@ -279,12 +384,10 @@ class ClonePage(Gtk.Box):
         if self._runner.running:
             self._progress.pulse()
             return True
+        self._progress.set_fraction(0)
         return False
 
-    # -- callbacks del runner (ya en el hilo principal) ---------------------
-
     def _on_line(self, line: str) -> None:
-        # El progreso crudo haría spam en el log; solo van líneas "reales".
         if not line.startswith("pages "):
             self._log.append_line(line)
 
@@ -294,9 +397,8 @@ class ClonePage(Gtk.Box):
     def _on_exit(self, code: int) -> None:
         self._btn_clone.set_sensitive(True)
         self._btn_cancel.set_sensitive(False)
-        self._progress.set_fraction(0)
         counters, done_dir = self._runner.counters, self._runner.done_dir
-        if not self._runner.running and code != 0 and not done_dir:
+        if code != 0 and not done_dir:
             self._status.set_text(f"kage salió con código {code}. Revisa el registro.")
         elif counters.errors:
             self._status.set_text(
@@ -309,7 +411,7 @@ class ClonePage(Gtk.Box):
 
 
 # ---------------------------------------------------------------------------
-# Vista: Biblioteca
+# Vista: Biblioteca (grid de cards con preview)
 # ---------------------------------------------------------------------------
 
 class LibraryPage(Gtk.Box):
@@ -322,6 +424,7 @@ class LibraryPage(Gtk.Box):
         self.set_margin_end(16)
         self._server = ServerSession()
         self._server.on_stopped = self._server_stopped
+        self._thumb_targets: dict[str, tuple[Gtk.Stack, Gtk.Picture]] = {}
 
         toolbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self._root_label = Gtk.Label(xalign=0)
@@ -334,11 +437,22 @@ class LibraryPage(Gtk.Box):
 
         scroll = Gtk.ScrolledWindow()
         scroll.set_vexpand(True)
-        self._list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE)
-        self._list.add_css_class("boxed-list")
-        self._list.connect("row-selected", lambda *_: self._sync_buttons())
-        scroll.set_child(self._list)
+        # Grid fijo de 3 columnas: con FlowBox las cards se estiraban a una
+        # sola columna; el Grid es predecible y la selección se lleva a mano
+        # con una clase CSS sobre la card elegida.
+        self._grid = Gtk.Grid(column_spacing=12, row_spacing=12,
+                              column_homogeneous=True)
+        self._grid.set_valign(Gtk.Align.START)
+        self._selected_mirror: Mirror | None = None
+        self._selected_card: Gtk.Box | None = None
+        self._card_count = 0
+        scroll.set_child(self._grid)
         self.append(scroll)
+        self._empty_label = Gtk.Label(
+            label="Todavía no hay mirrors. Clona un sitio en la pestaña Clonar.",
+            margin_top=10)
+        self._empty_label.set_visible(False)
+        self.append(self._empty_label)
 
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self._btn_view = Gtk.Button(label="Ver")
@@ -366,7 +480,8 @@ class LibraryPage(Gtk.Box):
         self._btn_delete.connect("clicked", self._confirm_delete)
         actions.append(self._btn_delete)
         self._action_buttons = [
-            self._btn_view, pack_zim, pack_bin, pack_app, open_folder, self._btn_delete,
+            self._btn_view, pack_zim, pack_bin, pack_app, open_folder,
+            self._btn_delete,
         ]
         self.append(actions)
 
@@ -379,33 +494,98 @@ class LibraryPage(Gtk.Box):
     def refresh(self) -> None:
         root = self._window.out_root()
         self._root_label.set_text(f"Mirrors en {root}")
-        while (row := self._list.get_row_at_index(0)) is not None:
-            self._list.remove(row)
+        while (child := self._grid.get_first_child()) is not None:
+            self._grid.remove(child)
+        self._thumb_targets.clear()
+        self._selected_mirror = None
+        self._selected_card = None
+        self._card_count = 0
         mirrors = scan_library(root)
-        if not mirrors:
-            row = Gtk.ListBoxRow(selectable=False)
-            row.set_child(Gtk.Label(
-                label="Todavía no hay mirrors. Clona un sitio en la pestaña Clonar.",
-                margin_top=12, margin_bottom=12))
-            self._list.append(row)
+        self._empty_label.set_visible(not mirrors)
+        pending: list[Mirror] = []
         for mirror in mirrors:
-            row = Gtk.ListBoxRow()
-            row.mirror = mirror  # type: ignore[attr-defined]
-            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-            box.set_margin_top(6)
-            box.set_margin_bottom(6)
-            box.set_margin_start(10)
-            title = Gtk.Label(label=mirror.name, xalign=0)
-            title.set_markup(f"<b>{GLib.markup_escape_text(mirror.name)}</b>")
-            box.append(title)
-            box.append(Gtk.Label(label=mirror.subtitle, xalign=0))
-            row.set_child(box)
-            self._list.append(row)
+            self._add_card(mirror)
+            cached = previews.thumbnail_file(mirror.path, mirror.mtime)
+            if os.path.isfile(cached):
+                self._set_thumb(mirror.path, cached)
+            else:
+                pending.append(mirror)
+        if pending:
+            threading.Thread(target=self._generate_thumbs, args=(pending,),
+                             daemon=True).start()
+        self._sync_buttons()
+
+    def _generate_thumbs(self, mirrors: list[Mirror]) -> None:
+        for mirror in mirrors:
+            path = previews.generate_thumbnail(mirror.path, mirror.mtime)
+            if path:
+                _idle(self._set_thumb, mirror.path, path)
+
+    def _set_thumb(self, mirror_path: str, thumb_path: str) -> None:
+        target = self._thumb_targets.get(mirror_path)
+        if target is None:
+            return
+        stack, picture = target
+        picture.set_filename(thumb_path)
+        stack.set_visible_child_name("thumb")
+
+    def _add_card(self, mirror: Mirror) -> None:
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        card.add_css_class("kage-card")
+        card.set_size_request(228, -1)
+
+        stack = Gtk.Stack()
+        stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        # Tamaño fijo: sin esto, el ancho natural de la captura (640 px)
+        # estira la card y el grid queda a una sola columna.
+        stack.set_size_request(212, 132)
+        stack.set_overflow(Gtk.Overflow.HIDDEN)
+        stack.set_halign(Gtk.Align.CENTER)
+        placeholder = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        placeholder.set_size_request(212, 132)
+        placeholder.set_valign(Gtk.Align.CENTER)
+        icon = Gtk.Image.new_from_icon_name("web-browser-symbolic")
+        icon.set_pixel_size(48)
+        icon.set_halign(Gtk.Align.CENTER)
+        placeholder.append(icon)
+        placeholder.append(Gtk.Label(label="sin preview", halign=Gtk.Align.CENTER))
+        stack.add_named(placeholder, "placeholder")
+        picture = Gtk.Picture(content_fit=Gtk.ContentFit.COVER)
+        picture.set_can_shrink(True)
+        picture.set_size_request(212, 132)
+        picture.add_css_class("kage-thumb")
+        stack.add_named(picture, "thumb")
+        stack.set_visible_child_name("placeholder")
+        card.append(stack)
+        self._thumb_targets[mirror.path] = (stack, picture)
+
+        title = Gtk.Label(xalign=0, ellipsize=3)  # PANGO_ELLIPSIZE_END
+        title.set_markup(f"<b>{GLib.markup_escape_text(mirror.name)}</b>")
+        title.set_tooltip_text(mirror.path)
+        card.append(title)
+        pages = f"{mirror.pages} páginas" if mirror.pages >= 0 else "sin estado"
+        date = datetime.fromtimestamp(mirror.mtime).strftime("%d %b %Y")
+        card.append(Gtk.Label(
+            label=f"{pages} · {mirror.size_human}\n{date}", xalign=0))
+        card.set_valign(Gtk.Align.START)
+        gesture = Gtk.GestureClick()
+        gesture.connect("released", lambda *_: self._select_card(card, mirror))
+        card.add_controller(gesture)
+        self._grid.attach(card, self._card_count % 3, self._card_count // 3, 1, 1)
+        self._card_count += 1
+
+    def _select_card(self, card: Gtk.Box, mirror: Mirror) -> None:
+        if self._selected_card is not None:
+            self._selected_card.remove_css_class("kage-card-selected")
+            self._selected_card.add_css_class("kage-card")
+        card.remove_css_class("kage-card")
+        card.add_css_class("kage-card-selected")
+        self._selected_card = card
+        self._selected_mirror = mirror
         self._sync_buttons()
 
     def _selected(self) -> Mirror | None:
-        row = self._list.get_selected_row()
-        return getattr(row, "mirror", None) if row else None
+        return self._selected_mirror
 
     def _sync_buttons(self) -> None:
         has = self._selected() is not None
@@ -473,7 +653,7 @@ class LibraryPage(Gtk.Box):
 
 
 # ---------------------------------------------------------------------------
-# Vista: Abrir ZIM
+# Vista: Abrir ZIM (igual que en v1)
 # ---------------------------------------------------------------------------
 
 class OpenZimPage(Gtk.Box):
@@ -515,9 +695,9 @@ class OpenZimPage(Gtk.Box):
         dialog = Gtk.FileDialog(title="Elige un archivo ZIM")
         zim_filter = Gtk.FileFilter(name="Archivos ZIM")
         zim_filter.add_pattern("*.zim")
-        filters = Gio.ListStore.new(Gtk.FileFilter)
-        filters.append(zim_filter)
-        dialog.set_filters(filters)
+        store = Gio.ListStore.new(Gtk.FileFilter)
+        store.append(zim_filter)
+        dialog.set_filters(store)
         dialog.open(self._window, None, self._on_picked)
 
     def _on_picked(self, dialog, result, *args) -> None:
@@ -549,6 +729,109 @@ class OpenZimPage(Gtk.Box):
         self._status.set_text("Servidor detenido.")
         self._btn_view.set_label("Ver")
         self._btn_browser.set_sensitive(False)
+
+
+# ---------------------------------------------------------------------------
+# Vista: Sistema (versión instalada y actualizaciones)
+# ---------------------------------------------------------------------------
+
+class SistemaPage(Gtk.Box):
+    def __init__(self, window: "MainWindow") -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self._window = window
+        self.set_margin_top(16)
+        self.set_margin_bottom(16)
+        self.set_margin_start(16)
+        self.set_margin_end(16)
+        self._release: updates.ReleaseInfo | None = None
+
+        self.append(_label("kage", bold=True))
+        self._installed = Gtk.Label(label="", xalign=0, selectable=True)
+        self.append(self._installed)
+        self._chrome = Gtk.Label(label="", xalign=0)
+        self.append(self._chrome)
+
+        buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self._btn_setup = Gtk.Button(label="Instalar kage…")
+        self._btn_setup.connect(
+            "clicked", lambda *_: SetupDialog(self._window).present())
+        buttons.append(self._btn_setup)
+        self._btn_check = Gtk.Button(label="Buscar actualizaciones")
+        self._btn_check.add_css_class("suggested-action")
+        self._btn_check.connect("clicked", self._check)
+        buttons.append(self._btn_check)
+        self.append(buttons)
+
+        self._update_status = Gtk.Label(label="", xalign=0, wrap=True)
+        self.append(self._update_status)
+
+        upd_buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self._btn_release = Gtk.Button(label="Ver la release", sensitive=False)
+        self._btn_release.connect("clicked", lambda *_: self._release
+                                  and webbrowser.open(self._release.url))
+        upd_buttons.append(self._btn_release)
+        self._btn_deb = Gtk.Button(label="Descargar el .deb", sensitive=False)
+        self._btn_deb.connect("clicked", lambda *_: self._release
+                              and self._release.deb_amd64_url
+                              and webbrowser.open(self._release.deb_amd64_url))
+        upd_buttons.append(self._btn_deb)
+        self.append(upd_buttons)
+        self.append(Gtk.Label(
+            label="Si instalaste kage con apt, actualizar es simplemente:\n"
+                  "sudo apt update && sudo apt upgrade kage",
+            xalign=0, selectable=True))
+        self.refresh_status()
+
+    def refresh_status(self) -> None:
+        kage_bin = self._window.kage_bin
+        if kage_bin:
+            version = commands.kage_version(kage_bin)
+            self._installed.set_text(f"Instalado: kage {version}  ({kage_bin})")
+            self._btn_setup.set_label("Reinstalar kage…")
+        else:
+            self._installed.set_text("Instalado: no se encontró kage.")
+            self._btn_setup.set_label("Instalar kage…")
+        chrome = previews.find_chrome_binary()
+        self._chrome.set_text(
+            f"Chrome/Chromium para clonar y previews: {chrome or 'no encontrado (kage descargará uno al primer clone)'}")
+
+    def _check(self, _btn) -> None:
+        self._btn_check.set_sensitive(False)
+        self._update_status.set_text("Consultando GitHub…")
+        threading.Thread(target=self._fetch, daemon=True).start()
+
+    def _fetch(self) -> None:
+        try:
+            release = updates.fetch_latest()
+        except Exception as exc:  # red caída, proxy, etc.
+            _idle(self._check_failed, str(exc))
+            return
+        _idle(self._check_done, release)
+
+    def _check_failed(self, message: str) -> None:
+        self._btn_check.set_sensitive(True)
+        self._update_status.set_text(f"No se pudo consultar: {message}")
+
+    def _check_done(self, release: updates.ReleaseInfo) -> None:
+        self._release = release
+        self._btn_check.set_sensitive(True)
+        self._btn_release.set_sensitive(True)
+        self._btn_deb.set_sensitive(bool(release.deb_amd64_url))
+        installed = commands.kage_version(self._window.kage_bin) \
+            if self._window.kage_bin else ""
+        if not installed:
+            self._update_status.set_text(
+                f"Última versión disponible: {release.tag}. "
+                "kage no está instalado: usa «Instalar kage…».")
+        elif updates.is_newer(release.version, installed):
+            self._update_status.set_text(
+                f"Hay una actualización: tienes {installed} y la última es "
+                f"{release.version} ({release.published[:10]}). Descarga el "
+                ".deb o actualiza con apt.")
+        else:
+            self._update_status.set_text(
+                f"Estás al día: kage {installed} es la última versión "
+                f"({release.tag}).")
 
 
 # ---------------------------------------------------------------------------
@@ -597,38 +880,86 @@ class PackDialog(Gtk.Window):
 class MainWindow(Gtk.ApplicationWindow):
     def __init__(self, app: Gtk.Application) -> None:
         super().__init__(application=app, title="Kage GUI")
-        self.set_default_size(860, 640)
+        self.set_default_size(900, 660)
+
+        self._cfg = config.load_config()
+        apply_theme(self._cfg["theme"])
+
+        provider = Gtk.CssProvider()
+        provider.load_from_string(_CSS)
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(), provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
         self.kage_bin = commands.find_kage()
         self._clone_page = ClonePage(self)
         self._library_page = LibraryPage(self)
         self._zim_page = OpenZimPage(self)
+        self._sistema_page = SistemaPage(self)
 
         stack = Gtk.Stack()
         stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         stack.add_titled(self._clone_page, "clone", "Clonar")
         stack.add_titled(self._library_page, "library", "Biblioteca")
         stack.add_titled(self._zim_page, "zim", "Abrir ZIM")
+        stack.add_titled(self._sistema_page, "sistema", "Sistema")
+        self._stack = stack
 
         header = Gtk.HeaderBar()
-        switcher = Gtk.StackSwitcher(stack=stack)
-        header.set_title_widget(switcher)
-        if self.kage_bin:
-            version = commands.kage_version(self.kage_bin)
-            header.pack_end(Gtk.Label(label=f"kage {version}".strip()))
+        header.set_title_widget(Gtk.StackSwitcher(stack=stack))
+        self._version_label = Gtk.Label(label="")
+        header.pack_end(self._version_label)
+        self._theme_dropdown = Gtk.DropDown.new_from_strings(list(_THEME_LABELS))
+        self._theme_dropdown.set_tooltip_text("Tema de la interfaz")
+        self._theme_dropdown.set_selected(_THEME_ORDER.index(self._cfg["theme"]))
+        self._theme_dropdown.connect("notify::selected", self._on_theme_changed)
+        header.pack_end(self._theme_dropdown)
         self.set_titlebar(header)
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        if not self.kage_bin:
-            banner = Gtk.InfoBar(message_type=Gtk.MessageType.WARNING)
-            banner.set_show_close_button(True)
-            banner.add_child(Gtk.Label(
-                label="No encuentro el binario «kage». Instálalo con el .deb de "
-                      "github.com/tamnd/kage/releases o «sudo apt install kage» "
-                      "y reinicia esta app."))
-            root.append(banner)
+        self._banner = Gtk.InfoBar(message_type=Gtk.MessageType.WARNING)
+        self._banner.set_show_close_button(True)
+        banner_label = Gtk.Label(
+            label="No encuentro el binario «kage». Abre la pestaña Sistema "
+                  "para instalarlo desde aquí.")
+        self._banner.add_child(banner_label)
+        root.append(self._banner)
         root.append(stack)
         self.set_child(root)
+
+        self.refresh_kage_status()
+
+        first_run = not self._cfg.get("welcomed", False)
+        if first_run:
+            self._cfg["welcomed"] = True
+            config.save_config(self._cfg)
+        if not self.kage_bin:
+            # Primera vez (o cualquier arranque) sin kage: ofrecer instalación.
+            GLib.timeout_add(500, self._offer_setup)
+
+    def _offer_setup(self) -> bool:
+        if not self.kage_bin:
+            SetupDialog(self).present()
+        return False
+
+    def _on_theme_changed(self, dropdown, _param) -> None:
+        mode = _THEME_ORDER[dropdown.get_selected()]
+        self._cfg["theme"] = mode
+        config.save_config(self._cfg)
+        apply_theme(mode)
+
+    def refresh_kage_status(self) -> str | None:
+        """Re-detecta kage y actualiza header, banner y pestaña Sistema."""
+        self.kage_bin = commands.find_kage()
+        if self.kage_bin:
+            version = commands.kage_version(self.kage_bin)
+            self._version_label.set_text(f"kage {version}".strip())
+            self._banner.set_visible(False)
+        else:
+            self._version_label.set_text("sin kage")
+            self._banner.set_visible(True)
+        self._sistema_page.refresh_status()
+        return self.kage_bin
 
     def out_root(self) -> str:
         return os.path.expanduser(self._clone_page._out.get_text().strip()) \

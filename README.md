@@ -13,11 +13,27 @@ ejecuta con `subprocess`, mostrando progreso y registro en vivo.
   ruta de Chrome. Contadores en vivo (páginas/assets/errores) y botón
   Cancelar que manda SIGINT — kage guarda el estado y el clon se reanuda
   la próxima vez.
-- **Biblioteca**: los mirrors de la carpeta raíz, con nº de páginas (desde
-  `_kage/state.json`) y tamaño. Acciones: **Ver** (arranca `kage serve` en
+- **Biblioteca**: los mirrors de la carpeta raíz en un **grid de cards**,
+  cada una con una **preview real del sitio** (captura de su página
+  principal con Chrome headless, cacheada en `~/.cache/kage-gui/thumbs/`),
+  nombre, nº de páginas (desde `_kage/state.json`), tamaño y fecha.
+  Acciones sobre la card seleccionada: **Ver** (arranca `kage serve` en
   un puerto libre y abre el navegador), **Empaquetar ZIM / binario / App**
   (`kage pack`), abrir la carpeta y eliminar.
 - **Abrir ZIM**: elige un `.zim` y lo sirve con `kage open` para leerlo.
+- **Sistema**: versión de kage instalada y su ruta, Chrome detectado, y
+  **Buscar actualizaciones** (consulta la última release en GitHub y dice
+  si estás al día, con enlaces a la release y al `.deb`).
+
+## Primera vez y tema
+
+Al arrancar, si **kage no está instalado**, la app abre un diálogo para
+instalarlo desde ahí (repo apt del autor, vía `pkexec`) o seguir las
+instrucciones manuales; también queda el aviso en la parte superior y el
+botón «Instalar kage…» en Sistema.
+
+El selector de tema del encabezado (Sistema / Claro / Oscuro) se guarda en
+`~/.config/kage-gui/config.json` y se aplica al arrancar.
 
 ## Requisitos
 
@@ -65,9 +81,12 @@ cp kage-gui.desktop ~/.local/share/applications/
 | `kage_gui/commands.py` | Construcción de comandos (listas, sin shell) y detección del binario. Sin GTK. |
 | `kage_gui/runner.py` | Ejecuta procesos: quita ANSI, parsea contadores, cancelar = SIGINT. Sin GTK. |
 | `kage_gui/library.py` | Escanea la carpeta de mirrors y lee su estado. Sin GTK. |
-| `kage_gui/window.py` | Toda la interfaz GTK4: ventana, las 3 vistas y el diálogo de pack. |
+| `kage_gui/config.py` | Configuración persistente (tema, primera vez). Sin GTK. |
+| `kage_gui/updates.py` | Última release de kage en GitHub y comparación de versiones. Sin GTK. |
+| `kage_gui/previews.py` | Miniaturas de los mirrors con Chrome headless y su caché. Sin GTK. |
+| `kage_gui/window.py` | Toda la interfaz GTK4: ventana, las 4 vistas y los diálogos. |
 | `kage_gui/__main__.py` | Punto de entrada (`python3 -m kage_gui`). |
-| `tests/test_logic.py` | Tests de la lógica sin GUI. |
+| `tests/` | Tests de la lógica sin GUI (v1 y v2). |
 
 ## Tests
 
