@@ -1,5 +1,14 @@
 # Cambios
 
+## Sin publicar
+
+- **CI**: appimage-builder se instala en un venv propio con
+  `packaging==21.3` fijado. Con el `packaging` moderno del runner
+  (>= 22) el deploy de apt moría con `InvalidVersion: '1.21.1ubuntu2'`,
+  porque appimage-builder compara versiones de paquetes .deb con
+  `packaging.version.parse()` y las versiones estilo Debian dejaron de
+  aceptarse como `LegacyVersion`.
+
 ## 1.0.0 — 2026-10-31
 
 Primera versión publicada como ejecutable.
