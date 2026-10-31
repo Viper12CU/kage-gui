@@ -10,6 +10,10 @@
 # oficial para empaquetar. Sin receta, sin keyserver, sin Python de por
 # medio comparando versiones.
 #
+# El AppImage incluye kage: el script descarga la última release
+# oficial (o la fijada en KAGE_VERSION) y verifica su sha256.
+# Ejecutable autocontenido, sin instalar nada.
+#
 # Uso:  VERSION=1.0.0 bash packaging/build-appimage.sh
 # Si VERSION no viene del entorno, se lee de kage_gui/__init__.py.
 set -euo pipefail
@@ -51,8 +55,48 @@ install -m 644 packaging/kage-gui.desktop "$APPDIR/usr/share/applications/cu.fab
 install -m 644 packaging/kage-gui.desktop "$APPDIR/cu.fabian.kagegui.desktop"
 install -m 644 packaging/kage-gui.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/kage-gui.png"
 install -m 644 packaging/kage-gui.png "$APPDIR/kage-gui.png"
-# Vía local opcional: un kage dejado a mano en build/ se empaqueta.
-if [ -f build/kage ]; then install -m 755 build/kage "$APPDIR/usr/bin/kage"; fi
+
+# --- 1b. kage DENTRO del AppImage (decisión de Fabian, 2026-10-31) ---
+# Se descarga la release oficial y se verifica el sha256 comparando
+# hashes directamente (nada de `sha256sum -c` contra un tarball
+# renombrado: ese fue el fallo original de la v1 del workflow).
+# Un binario dejado a mano en build/kage tiene prioridad y salta la
+# descarga (útil para builds locales sin red).
+if [ -f build/kage ]; then
+  install -m 755 build/kage "$APPDIR/usr/bin/kage"
+  echo "== kage: usando el binario local de build/kage =="
+else
+  # Versión a empaquetar: la ÚLTIMA release oficial, resuelta en cada
+  # build siguiendo la redirección de /releases/latest (sin API ni
+  # claves), para que el AppImage nunca lleve un kage viejo. Se puede
+  # fijar una concreta con KAGE_VERSION=0.3.12 (builds reproducibles).
+  if [ -n "${KAGE_VERSION:-}" ]; then
+    KAGE_TAG="v${KAGE_VERSION}"
+  else
+    KAGE_TAG="$(curl -fsIL -o /dev/null -w '%{url_effective}' https://github.com/tamnd/kage/releases/latest | sed 's@.*/tag/@@')"
+    case "$KAGE_TAG" in
+      v*) KAGE_VERSION="${KAGE_TAG#v}" ;;
+      *) echo "ERROR: no se pudo resolver la última versión de kage (tag: '$KAGE_TAG')" >&2; exit 1 ;;
+    esac
+  fi
+  KAGE_TARBALL="kage_${KAGE_VERSION}_linux_amd64.tar.gz"
+  KAGE_URL="https://github.com/tamnd/kage/releases/download/${KAGE_TAG}"
+  mkdir -p "$WORKDIR/kage"
+  curl -fL -o "$WORKDIR/kage/$KAGE_TARBALL" "$KAGE_URL/$KAGE_TARBALL"
+  curl -fL -o "$WORKDIR/kage/checksums.txt" "$KAGE_URL/checksums.txt"
+  expected="$(awk -v f="$KAGE_TARBALL" '$2 == f || $2 == "*" f {print $1}' "$WORKDIR/kage/checksums.txt")"
+  actual="$(sha256sum "$WORKDIR/kage/$KAGE_TARBALL" | awk '{print $1}')"
+  if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+    echo "ERROR: el sha256 de $KAGE_TARBALL no coincide (esperado: $expected, real: $actual)" >&2
+    exit 1
+  fi
+  echo "== kage $KAGE_VERSION (última release): sha256 verificado =="
+  # --no-same-owner: como root, tar intentaría restaurar el uid del
+  # tarball (1001) y hay entornos (contenedores) donde no puede.
+  tar --no-same-owner -xzf "$WORKDIR/kage/$KAGE_TARBALL" -C "$WORKDIR/kage"
+  install -m 755 "$WORKDIR/kage/kage" "$APPDIR/usr/bin/kage"
+fi
+"$APPDIR/usr/bin/kage" --version || true
 
 # --- 2. Runtime: descargar el cierre completo de .deb y extraerlo ---
 # Estado de apt vacío => apt ignora lo que el runner ya tenga instalado
@@ -88,6 +132,9 @@ cat > "$APPDIR/AppRun" <<EOF
 #!/bin/sh
 APPDIR="\$(dirname "\$(readlink -f "\$0")")"
 LIB="\$APPDIR/usr/lib/$MULTIARCH"
+# usr/bin primero en el PATH: la GUI localiza kage por el PATH y debe
+# encontrar el empaquetado antes que cualquier kage del sistema.
+export PATH="\$APPDIR/usr/bin:\$PATH"
 export LD_LIBRARY_PATH="\$LIB:\$APPDIR/usr/lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
 export PYTHONHOME="\$APPDIR/usr"
 export PYTHONPATH="\$APPDIR/usr/share/kage-gui:\$APPDIR/usr/lib/python3/dist-packages"
