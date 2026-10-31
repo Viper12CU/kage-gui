@@ -53,18 +53,27 @@ jobs:
       # y robusto, AppImage más ligero y kage se actualiza por apt sin
       # depender de que se recompublique la GUI.
 
-      - name: Instalar appimage-builder y appimagetool
+      # appimage-builder va en un venv propio con packaging==21.3 fijado:
+      # compara versiones de paquetes .deb con packaging.version.parse(),
+      # y desde packaging 22 esas versiones (p. ej. "1.21.1ubuntu2") ya no
+      # se aceptan como LegacyVersion: parse() lanza InvalidVersion y el
+      # deploy de apt muere a mitad de camino. Instalado con el pip del
+      # sistema tomaba el packaging moderno del runner (24.x) y reventaba;
+      # en el venv queda aislado con la última versión compatible.
+      - name: Instalar appimage-builder (venv aislado) y appimagetool
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-pip python3-setuptools patchelf desktop-file-utils wget file libfuse2 xvfb
+          sudo apt-get install -y python3-pip python3-setuptools python3-venv patchelf desktop-file-utils wget file libfuse2 xvfb
           sudo wget https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O /usr/local/bin/appimagetool
           sudo chmod +x /usr/local/bin/appimagetool
-          python3 -m pip install "appimage-builder==1.1.0"
+          python3 -m venv "$HOME/appimage-builder-venv"
+          "$HOME/appimage-builder-venv/bin/pip" install "appimage-builder==1.1.0" "packaging==21.3"
 
       - name: Construir el AppImage
         run: |
-          echo "== MARCADOR workflow v4: AppImage SIN kage empaquetado =="
-          appimage-builder --recipe AppImageBuilder.yml
+          echo "== MARCADOR workflow v5: appimage-builder en venv con packaging 21.3 =="
+          "$HOME/appimage-builder-venv/bin/python" -c "import packaging; print('packaging en uso:', packaging.__version__)"
+          "$HOME/appimage-builder-venv/bin/appimage-builder" --recipe AppImageBuilder.yml
 
       - name: Smoke test (la ventana debe abrir y quedarse viva)
         run: |
