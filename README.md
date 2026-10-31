@@ -24,6 +24,12 @@ ejecuta con `subprocess`, mostrando progreso y registro en vivo.
 - **Sistema**: versión de kage instalada y su ruta, Chrome detectado, y
   **Buscar actualizaciones** (consulta la última release en GitHub y dice
   si estás al día, con enlaces a la release y al `.deb`).
+- **Preferencias**: agrupa la configuración y los accesos — selector de
+  tema, la carpeta de destino de los clones con botón para **abrirla en
+  el explorador** (también hay botón en la barra de la Biblioteca y junto
+  al campo «Guardar en» de Clonar), abrir la carpeta de configuración, y
+  enlaces a la documentación oficial de kage, su repositorio, las
+  releases y los issues.
 
 ## Primera vez y tema
 

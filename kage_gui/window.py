@@ -44,6 +44,16 @@ def _idle(fn, *args):
     return False
 
 
+def open_folder(path: str) -> bool:
+    """Abre una carpeta en el explorador de archivos (la crea si falta)."""
+    try:
+        os.makedirs(path, exist_ok=True)
+        subprocess.Popen(["xdg-open", path])
+        return True
+    except OSError:
+        return False
+
+
 def apply_theme(mode: str) -> None:
     settings = Gtk.Settings.get_default()
     if settings is not None:
@@ -241,6 +251,12 @@ class ClonePage(Gtk.Box):
         pick = Gtk.Button(label="Elegir…")
         pick.connect("clicked", self._pick_out_dir)
         out_box.append(pick)
+        open_out = Gtk.Button(label="Abrir")
+        open_out.set_tooltip_text("Abrir la carpeta destino en el explorador")
+        open_out.connect("clicked", lambda *_: open_folder(
+            os.path.expanduser(self._out.get_text().strip())
+            or commands.DEFAULT_OUT_ROOT))
+        out_box.append(open_out)
         self.append(_row("Guardar en", out_box))
 
         grid = Gtk.Grid(column_spacing=12, row_spacing=8)
@@ -430,6 +446,11 @@ class LibraryPage(Gtk.Box):
         self._root_label = Gtk.Label(xalign=0)
         self._root_label.set_hexpand(True)
         toolbar.append(self._root_label)
+        open_root = Gtk.Button(label="Abrir carpeta destino")
+        open_root.set_tooltip_text(
+            "Abrir en el explorador la carpeta donde quedan las páginas clonadas")
+        open_root.connect("clicked", self._open_root)
+        toolbar.append(open_root)
         refresh = Gtk.Button(label="Refrescar")
         refresh.connect("clicked", lambda *_: self.refresh())
         toolbar.append(refresh)
@@ -615,7 +636,14 @@ class LibraryPage(Gtk.Box):
     def _open_folder(self, _btn) -> None:
         mirror = self._selected()
         if mirror:
-            subprocess.Popen(["xdg-open", mirror.path])
+            open_folder(mirror.path)
+
+    def _open_root(self, _btn) -> None:
+        root = self._window.out_root()
+        if open_folder(root):
+            self._status.set_text(f"Abriendo {root} en el explorador…")
+        else:
+            self._status.set_text(f"No se pudo abrir {root}.")
 
     def _pack(self, fmt: str, app: bool) -> None:
         mirror = self._selected()
@@ -835,6 +863,72 @@ class SistemaPage(Gtk.Box):
 
 
 # ---------------------------------------------------------------------------
+# Vista: Preferencias (configuración y accesos del proyecto)
+# ---------------------------------------------------------------------------
+
+class PreferencesPage(Gtk.Box):
+    """Agrupa la configuración de la app y los accesos a kage (docs/repo)."""
+
+    def __init__(self, window: "MainWindow") -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        self._window = window
+        self.set_margin_top(16)
+        self.set_margin_bottom(16)
+        self.set_margin_start(16)
+        self.set_margin_end(16)
+
+        self.append(_label("Apariencia", bold=True))
+        self.theme_dropdown = Gtk.DropDown.new_from_strings(list(_THEME_LABELS))
+        self.theme_dropdown.set_selected(
+            _THEME_ORDER.index(window._cfg["theme"]))
+        self.theme_dropdown.connect("notify::selected", window._on_theme_changed)
+        self.append(_row("Tema", self.theme_dropdown))
+
+        self.append(_label("Carpeta de destino", bold=True))
+        self._root_label = Gtk.Label(label="", xalign=0, selectable=True)
+        self.append(self._root_label)
+        dest_buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        open_dest = Gtk.Button(label="Abrir carpeta de destino")
+        open_dest.connect("clicked", self._open_destination)
+        dest_buttons.append(open_dest)
+        open_config = Gtk.Button(label="Abrir carpeta de configuración")
+        open_config.connect(
+            "clicked",
+            lambda *_: open_folder(os.path.dirname(config.config_path())))
+        dest_buttons.append(open_config)
+        self.append(dest_buttons)
+
+        self.append(_label("Documentación y proyecto kage", bold=True))
+        links = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        for text, url in (
+            ("Documentación oficial de kage", updates.DOCS_URL),
+            ("Repositorio en GitHub", updates.REPO_URL),
+            ("Releases y descargas", updates.RELEASES_URL),
+            ("Issues (problemas y sugerencias)", updates.ISSUES_URL),
+        ):
+            btn = Gtk.Button(label=f"{text}  —  {url}")
+            btn.set_halign(Gtk.Align.START)
+            btn.connect("clicked", lambda *_b, u=url: webbrowser.open(u))
+            links.append(btn)
+        self.append(links)
+
+        self._status = Gtk.Label(label="", xalign=0)
+        self.append(self._status)
+        self.refresh()
+
+    def refresh(self) -> None:
+        self._root_label.set_text(
+            f"Las páginas clonadas quedan en: {self._window.out_root()}")
+
+    def _open_destination(self, _btn) -> None:
+        root = self._window.out_root()
+        if open_folder(root):
+            self._status.set_text(f"Abriendo {root} en el explorador…")
+        else:
+            self._status.set_text(f"No se pudo abrir {root}.")
+
+
+# ---------------------------------------------------------------------------
 # Diálogo de pack (tarea corta con registro)
 # ---------------------------------------------------------------------------
 
@@ -896,6 +990,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._library_page = LibraryPage(self)
         self._zim_page = OpenZimPage(self)
         self._sistema_page = SistemaPage(self)
+        self._prefs_page = PreferencesPage(self)
 
         stack = Gtk.Stack()
         stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
@@ -903,6 +998,9 @@ class MainWindow(Gtk.ApplicationWindow):
         stack.add_titled(self._library_page, "library", "Biblioteca")
         stack.add_titled(self._zim_page, "zim", "Abrir ZIM")
         stack.add_titled(self._sistema_page, "sistema", "Sistema")
+        stack.add_titled(self._prefs_page, "preferencias", "Preferencias")
+        stack.connect("notify::visible-child",
+                      lambda *_: self._prefs_page.refresh())
         self._stack = stack
 
         header = Gtk.HeaderBar()
@@ -943,10 +1041,22 @@ class MainWindow(Gtk.ApplicationWindow):
         return False
 
     def _on_theme_changed(self, dropdown, _param) -> None:
-        mode = _THEME_ORDER[dropdown.get_selected()]
+        if getattr(self, "_syncing_theme", False):
+            return
+        self.set_theme(_THEME_ORDER[dropdown.get_selected()])
+
+    def set_theme(self, mode: str) -> None:
+        """Aplica y guarda el tema, sincronizando los dos selectores."""
         self._cfg["theme"] = mode
         config.save_config(self._cfg)
         apply_theme(mode)
+        self._syncing_theme = True
+        try:
+            index = _THEME_ORDER.index(mode)
+            self._theme_dropdown.set_selected(index)
+            self._prefs_page.theme_dropdown.set_selected(index)
+        finally:
+            self._syncing_theme = False
 
     def refresh_kage_status(self) -> str | None:
         """Re-detecta kage y actualiza header, banner y pestaña Sistema."""
@@ -967,3 +1077,4 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def refresh_library(self) -> None:
         self._library_page.refresh()
+        self._prefs_page.refresh()

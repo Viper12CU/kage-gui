@@ -12,6 +12,9 @@ from dataclasses import dataclass
 
 LATEST_URL = "https://api.github.com/repos/tamnd/kage/releases/latest"
 RELEASES_URL = "https://github.com/tamnd/kage/releases"
+REPO_URL = "https://github.com/tamnd/kage"
+DOCS_URL = "https://kage.tamnd.com"
+ISSUES_URL = "https://github.com/tamnd/kage/issues"
 
 # Script de instalación con el repo apt del autor (se ejecuta con pkexec,
 # es decir, ya como root: por eso no lleva sudo).
