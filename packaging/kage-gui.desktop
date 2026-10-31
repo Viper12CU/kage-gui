@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Kage GUI
+Comment=Clona sitios web para leerlos offline (interfaz para kage)
+Exec=kage-gui
+Icon=kage-gui
+Terminal=false
+Categories=Network;WebBrowser;Utility;
+Keywords=kage;offline;mirror;zim;kiwix;

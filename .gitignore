@@ -2,3 +2,8 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+# Build del AppImage (lo regenera el workflow)
+AppDir/
+appimage-builder-cache/
+*.AppImage
+build/

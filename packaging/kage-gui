@@ -1,0 +1,10 @@
+#!/bin/sh
+# Lanzador de Kage GUI dentro del AppImage.
+#
+# AppRun (generado por appimage-builder) ya define $APPDIR y mete
+# $APPDIR/usr/bin en el PATH: por eso el binario `kage` empaquetado en
+# usr/bin se encuentra solo, sin tocar commands.py (find_kage mira el PATH
+# primero). El código de la app vive en usr/share/kage-gui para no pisar
+# los paquetes de Python que apt coloca en usr/lib/python3/dist-packages.
+export PYTHONPATH="${APPDIR}/usr/share/kage-gui${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m kage_gui "$@"

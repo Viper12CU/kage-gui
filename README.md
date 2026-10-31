@@ -99,6 +99,32 @@ cp kage-gui.desktop ~/.local/share/applications/
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
+## Release automático (AppImage)
+
+Cada push a `main` dispara `.github/workflows/appimage-release.yml`:
+corre los tests, descarga el binario oficial de kage, construye el
+`.AppImage` con appimage-builder (receta `AppImageBuilder.yml`, base
+Ubuntu 22.04 para que corra en 22.04 en adelante), hace un smoke test
+abriendo la ventana bajo Xvfb y publica un Release nuevo con el
+ejecutable adjunto.
+
+- El tag es `v<versión>-build<nº>` y el release queda como pre-release,
+  porque la versión de la app no cambia en cada push. Para releases
+  «de verdad» solo con tag, mira el comentario al inicio del workflow.
+- El AppImage lleva **kage empaquetado dentro** (`usr/bin/kage`): quien
+  lo descarga no necesita instalar kage aparte. Chrome/Chromium no va
+  dentro; si el sistema no tiene ninguno, kage descarga el suyo la
+  primera vez que clona, como siempre.
+- Ejecutarlo en el PC puede pedir FUSE (`libfuse2` en Ubuntu 22.04;
+  en 24.04+ suele venir `libfuse2t64`). Sin FUSE:
+  `./Kage_GUI-*.AppImage --appimage-extract-and-run`.
+
+Build local del mismo AppImage:
+
+```bash
+VERSION=0.4.0 appimage-builder --recipe AppImageBuilder.yml
+```
+
 ## Notas de diseño
 
 - `serve`/`open` usan un puerto libre en vez del 8800 fijo de kage, para

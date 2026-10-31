@@ -1,0 +1,99 @@
+name: AppImage Release
+
+# Cada push a main: tests -> AppImage -> Release nuevo.
+#
+# Ojo con la estrategia de tags: como la versión de la app no cambia en
+# cada push, el tag lleva el nº de ejecución (v0.4.0-build7, v0.4.0-build8…)
+# y el release se marca como "pre-release". Si prefieres releases solo
+# cuando tú lo decidas, cambia el disparador a tags:
+#   on:
+#     push:
+#       tags: ['v*']
+# y usa ese tag (github.ref_name) en el paso de publicación.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: appimage-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Versión de kage que se empaqueta DENTRO del AppImage.
+  KAGE_VERSION: "0.3.12"
+  # Los runners no tienen FUSE: todo AppImage (appimagetool incluido)
+  # se ejecuta extraído en vez de montado.
+  APPIMAGE_EXTRACT_AND_RUN: "1"
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Leer versión de la app
+        id: version
+        run: |
+          VERSION="$(python3 -c "import re; print(re.search(r'__version__ = \"(.+)\"', open('kage_gui/__init__.py').read()).group(1))")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION-build${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Tests de lógica (sin GTK)
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Descargar kage oficial (se empaqueta en el AppImage)
+        run: |
+          mkdir -p build
+          base="https://github.com/tamnd/kage/releases/download/v${KAGE_VERSION}"
+          curl -fL -o "build/kage.tar.gz" "$base/kage_${KAGE_VERSION}_linux_amd64.tar.gz"
+          curl -fL -o "build/checksums.txt" "$base/checksums.txt"
+          cd build
+          grep " kage_${KAGE_VERSION}_linux_amd64.tar.gz\$" checksums.txt | sha256sum -c -
+          tar xzf kage.tar.gz
+          chmod +x kage
+          ./kage --version
+
+      - name: Instalar appimage-builder y appimagetool
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip python3-setuptools patchelf desktop-file-utils wget file libfuse2 xvfb
+          sudo wget https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O /usr/local/bin/appimagetool
+          sudo chmod +x /usr/local/bin/appimagetool
+          python3 -m pip install "appimage-builder==1.1.0"
+
+      - name: Construir el AppImage
+        run: appimage-builder --recipe AppImageBuilder.yml
+
+      - name: Smoke test (la ventana debe abrir y quedarse viva)
+        run: |
+          appimage="$(ls Kage_GUI-*-x86_64.AppImage)"
+          chmod +x "$appimage"
+          set +e
+          timeout 15 xvfb-run -a "./$appimage" > smoke.log 2>&1
+          code=$?
+          set -e
+          cat smoke.log
+          # 124 = timeout la mató: la app seguía abierta, que es lo esperado.
+          # Cualquier otro código = se cerró sola o explotó al arrancar.
+          if [ "$code" -ne 124 ]; then
+            echo "::error::La AppImage no arrancó (código $code)"
+            exit 1
+          fi
+          echo "OK: la ventana abrió y seguía viva a los 15 s"
+
+      - name: Publicar Release con el AppImage
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Kage GUI ${{ steps.version.outputs.tag }}
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            Kage_GUI-*-x86_64.AppImage

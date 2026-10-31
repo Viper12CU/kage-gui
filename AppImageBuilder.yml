@@ -1,0 +1,72 @@
+# Receta de appimage-builder para Kage GUI.
+# Ver: https://appimage-builder.readthedocs.io
+#
+# Build local equivalente al de GitHub Actions:
+#   VERSION=0.4.0 appimage-builder --recipe AppImageBuilder.yml
+# (VERSION sale de kage_gui/__init__.py; en CI la exporta el workflow.)
+#
+# Base Ubuntu 22.04 (jammy) a propósito: es el denominador común más viejo
+# razonable. Un AppImage construido sobre 24.04/26.04 no correría en 22.04
+# por la glibc; al revés sí funciona.
+version: 1
+
+# Este paso corre en la raíz del repo y deja la app dentro de AppDir.
+# El binario de kage es opcional aquí: si está en build/kage (en CI lo
+# descarga el workflow desde la release oficial), se empaqueta en
+# usr/bin/kage y la GUI lo encuentra por el PATH sin cambios de código.
+script: |
+  rm -rf AppDir
+  mkdir -p AppDir/usr/bin
+  mkdir -p AppDir/usr/share/kage-gui
+  mkdir -p AppDir/usr/share/applications
+  mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+  cp -r kage_gui AppDir/usr/share/kage-gui/
+  find AppDir/usr/share/kage-gui -name __pycache__ -type d -exec rm -rf {} + || true
+  install -m 755 packaging/kage-gui AppDir/usr/bin/kage-gui
+  install -m 644 packaging/kage-gui.desktop AppDir/usr/share/applications/cu.fabian.kagegui.desktop
+  install -m 644 packaging/kage-gui.png AppDir/usr/share/icons/hicolor/256x256/apps/kage-gui.png
+  install -m 644 packaging/kage-gui.png AppDir/kage-gui.png
+  if [ -f build/kage ]; then install -m 755 build/kage AppDir/usr/bin/kage; fi
+
+AppDir:
+  path: ./AppDir
+  app_info:
+    id: cu.fabian.kagegui
+    name: Kage GUI
+    icon: kage-gui
+    version: !ENV ${VERSION}
+    exec: usr/bin/kage-gui
+    exec_args: $@
+  apt:
+    arch: amd64
+    allow_unauthenticated: false
+    sources:
+      - sourceline: 'deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy main restricted universe multiverse'
+        key_url: 'http://keyserver.ubuntu.com/pks/lookup?op=get&search=0x3b4fe6acc0b21f32'
+      - sourceline: 'deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy-updates main restricted universe multiverse'
+        key_url: 'http://keyserver.ubuntu.com/pks/lookup?op=get&search=0x3b4fe6acc0b21f32'
+      - sourceline: 'deb [arch=amd64] http://security.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse'
+        key_url: 'http://keyserver.ubuntu.com/pks/lookup?op=get&search=0x3b4fe6acc0b21f32'
+    # Solo el paquete raíz de cada cosa: apt resuelve y appimage-builder
+    # empaqueta también las dependencias (libgtk-4, pango, gdk-pixbuf...).
+    include:
+      - python3
+      - python3-gi
+      - gir1.2-gtk-4.0
+      - adwaita-icon-theme
+      - hicolor-icon-theme
+      - librsvg2-common
+    exclude:
+      - humanity-icon-theme
+      - ubuntu-mono
+  files:
+    exclude:
+      - usr/share/man
+      - usr/share/doc
+      - usr/share/locale
+
+AppImage:
+  arch: x86_64
+  update-information: None
+  sign-key: None
+  file_name: !ENV 'Kage_GUI-${VERSION}-x86_64.AppImage'
