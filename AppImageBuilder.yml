@@ -53,17 +53,24 @@ jobs:
         run: |
           mkdir -p build
           base="https://github.com/tamnd/kage/releases/download/v${KAGE_VERSION}"
-          # OJO: conservar el nombre original del .tar.gz. checksums.txt lo
-          # lista por ese nombre y `sha256sum -c` lo busca tal cual; si se
-          # renombra al descargar (p. ej. a kage.tar.gz), la verificación
-          # falla con "No such file or directory" aunque la descarga sea buena.
-          curl -fL -o "build/kage_${KAGE_VERSION}_linux_amd64.tar.gz" "$base/kage_${KAGE_VERSION}_linux_amd64.tar.gz"
+          file="kage_${KAGE_VERSION}_linux_amd64.tar.gz"
+          # 1) Descargar el binario oficial de kage y su lista de hashes.
+          curl -fL -o "build/$file" "$base/$file"
           curl -fL -o "build/checksums.txt" "$base/checksums.txt"
-          cd build
-          grep " kage_${KAGE_VERSION}_linux_amd64.tar.gz\$" checksums.txt | sha256sum -c -
-          tar xzf "kage_${KAGE_VERSION}_linux_amd64.tar.gz"
-          chmod +x kage
-          ./kage --version
+          # 2) Verificar la integridad comparando los dos hashes directamente.
+          #    (No se usa `sha256sum -c checksums.txt`: ese modo busca el
+          #    archivo por el nombre que trae la lista, y si el descargado se
+          #    llama distinto falla con "No such file or directory".)
+          expected="$(awk -v f="$file" '$2 == f {print $1}' build/checksums.txt)"
+          actual="$(sha256sum "build/$file" | cut -d' ' -f1)"
+          echo "sha256 esperado (checksums.txt): $expected"
+          echo "sha256 del archivo descargado:   $actual"
+          test -n "$expected" && test "$expected" = "$actual"
+          # 3) Extraer y dejar el binario listo en build/kage, que es lo que
+          #    la receta AppImageBuilder.yml copia dentro del AppImage.
+          tar xzf "build/$file" -C build
+          chmod +x build/kage
+          ./build/kage --version
 
       - name: Instalar appimage-builder y appimagetool
         run: |
