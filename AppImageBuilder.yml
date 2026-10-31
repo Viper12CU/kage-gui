@@ -1,73 +1,104 @@
-# Receta de appimage-builder para Kage GUI.
-# Ver: https://appimage-builder.readthedocs.io
+name: AppImage Release
+
+# Cada push a main: tests -> AppImage -> Release nuevo.
 #
-# Build local equivalente al de GitHub Actions:
-#   VERSION=1.0.0 appimage-builder --recipe AppImageBuilder.yml
-# El resultado se llama kage-gui-<versión>.AppImage (p. ej. kage-gui-1.0.0.AppImage).
-# (VERSION sale de kage_gui/__init__.py; en CI la exporta el workflow.)
-#
-# Base Ubuntu 22.04 (jammy) a propósito: es el denominador común más viejo
-# razonable. Un AppImage construido sobre 24.04/26.04 no correría en 22.04
-# por la glibc; al revés sí funciona.
-version: 1
+# Ojo con la estrategia de tags: como la versión de la app no cambia en
+# cada push, el tag lleva el nº de ejecución (v1.0.0-build7, v1.0.0-build8…)
+# y el ejecutable se llama kage-gui-<versión>.AppImage (kage-gui-1.0.0.AppImage).
+# y el release se marca como "pre-release". Si prefieres releases solo
+# cuando tú lo decidas, cambia el disparador a tags:
+#   on:
+#     push:
+#       tags: ['v*']
+# y usa ese tag (github.ref_name) en el paso de publicación.
 
-# Este paso corre en la raíz del repo y deja la app dentro de AppDir.
-# El binario de kage es opcional aquí: si está en build/kage (en CI lo
-# descarga el workflow desde la release oficial), se empaqueta en
-# usr/bin/kage y la GUI lo encuentra por el PATH sin cambios de código.
-script: |
-  rm -rf AppDir
-  mkdir -p AppDir/usr/bin
-  mkdir -p AppDir/usr/share/kage-gui
-  mkdir -p AppDir/usr/share/applications
-  mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
-  cp -r kage_gui AppDir/usr/share/kage-gui/
-  find AppDir/usr/share/kage-gui -name __pycache__ -type d -exec rm -rf {} + || true
-  install -m 755 packaging/kage-gui AppDir/usr/bin/kage-gui
-  install -m 644 packaging/kage-gui.desktop AppDir/usr/share/applications/cu.fabian.kagegui.desktop
-  install -m 644 packaging/kage-gui.png AppDir/usr/share/icons/hicolor/256x256/apps/kage-gui.png
-  install -m 644 packaging/kage-gui.png AppDir/kage-gui.png
-  if [ -f build/kage ]; then install -m 755 build/kage AppDir/usr/bin/kage; fi
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
 
-AppDir:
-  path: ./AppDir
-  app_info:
-    id: cu.fabian.kagegui
-    name: Kage GUI
-    icon: kage-gui
-    version: !ENV ${VERSION}
-    exec: usr/bin/kage-gui
-    exec_args: $@
-  apt:
-    arch: amd64
-    allow_unauthenticated: false
-    sources:
-      - sourceline: 'deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy main restricted universe multiverse'
-        key_url: 'http://keyserver.ubuntu.com/pks/lookup?op=get&search=0x3b4fe6acc0b21f32'
-      - sourceline: 'deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy-updates main restricted universe multiverse'
-        key_url: 'http://keyserver.ubuntu.com/pks/lookup?op=get&search=0x3b4fe6acc0b21f32'
-      - sourceline: 'deb [arch=amd64] http://security.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse'
-        key_url: 'http://keyserver.ubuntu.com/pks/lookup?op=get&search=0x3b4fe6acc0b21f32'
-    # Solo el paquete raíz de cada cosa: apt resuelve y appimage-builder
-    # empaqueta también las dependencias (libgtk-4, pango, gdk-pixbuf...).
-    include:
-      - python3
-      - python3-gi
-      - gir1.2-gtk-4.0
-      - adwaita-icon-theme
-      - hicolor-icon-theme
-      - librsvg2-common
-    exclude:
-      - humanity-icon-theme
-      - ubuntu-mono
-  files:
-    exclude:
-      - usr/share/man
-      - usr/share/doc
-      - usr/share/locale
+permissions:
+  contents: write
 
-AppImage:
-  arch: x86_64
-  update-information: None
-  sign-key: None
-  file_name: !ENV 'kage-gui-${VERSION}.AppImage'
+concurrency:
+  group: appimage-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Versión de kage que se empaqueta DENTRO del AppImage.
+  KAGE_VERSION: "0.3.12"
+  # Los runners no tienen FUSE: todo AppImage (appimagetool incluido)
+  # se ejecuta extraído en vez de montado.
+  APPIMAGE_EXTRACT_AND_RUN: "1"
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Leer versión de la app
+        id: version
+        run: |
+          VERSION="$(python3 -c "import re; print(re.search(r'__version__ = \"(.+)\"', open('kage_gui/__init__.py').read()).group(1))")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION-build${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Tests de lógica (sin GTK)
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Descargar kage oficial (se empaqueta en el AppImage)
+        run: |
+          mkdir -p build
+          base="https://github.com/tamnd/kage/releases/download/v${KAGE_VERSION}"
+          # OJO: conservar el nombre original del .tar.gz. checksums.txt lo
+          # lista por ese nombre y `sha256sum -c` lo busca tal cual; si se
+          # renombra al descargar (p. ej. a kage.tar.gz), la verificación
+          # falla con "No such file or directory" aunque la descarga sea buena.
+          curl -fL -o "build/kage_${KAGE_VERSION}_linux_amd64.tar.gz" "$base/kage_${KAGE_VERSION}_linux_amd64.tar.gz"
+          curl -fL -o "build/checksums.txt" "$base/checksums.txt"
+          cd build
+          grep " kage_${KAGE_VERSION}_linux_amd64.tar.gz\$" checksums.txt | sha256sum -c -
+          tar xzf "kage_${KAGE_VERSION}_linux_amd64.tar.gz"
+          chmod +x kage
+          ./kage --version
+
+      - name: Instalar appimage-builder y appimagetool
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip python3-setuptools patchelf desktop-file-utils wget file libfuse2 xvfb
+          sudo wget https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O /usr/local/bin/appimagetool
+          sudo chmod +x /usr/local/bin/appimagetool
+          python3 -m pip install "appimage-builder==1.1.0"
+
+      - name: Construir el AppImage
+        run: appimage-builder --recipe AppImageBuilder.yml
+
+      - name: Smoke test (la ventana debe abrir y quedarse viva)
+        run: |
+          appimage="$(ls kage-gui-*.AppImage)"
+          chmod +x "$appimage"
+          set +e
+          timeout 15 xvfb-run -a "./$appimage" > smoke.log 2>&1
+          code=$?
+          set -e
+          cat smoke.log
+          # 124 = timeout la mató: la app seguía abierta, que es lo esperado.
+          # Cualquier otro código = se cerró sola o explotó al arrancar.
+          if [ "$code" -ne 124 ]; then
+            echo "::error::La AppImage no arrancó (código $code)"
+            exit 1
+          fi
+          echo "OK: la ventana abrió y seguía viva a los 15 s"
+
+      - name: Publicar Release con el AppImage
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Kage GUI ${{ steps.version.outputs.tag }}
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            kage-gui-*.AppImage
