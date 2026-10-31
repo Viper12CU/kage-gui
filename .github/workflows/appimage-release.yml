@@ -11,6 +11,13 @@ name: AppImage Release
 #     push:
 #       tags: ['v*']
 # y usa ese tag (github.ref_name) en el paso de publicación.
+#
+# ARQUITECTURA (v6): este workflow es deliberadamente FINO y estable.
+# Toda la lógica de construcción vive en packaging/build-appimage.sh,
+# un archivo normal del repo que se puede corregir con PRs sin tocar
+# este workflow. Se acabó appimage-builder (sin mantenimiento desde
+# 2022): el script arma el AppDir a mano, extrae los .deb del propio
+# apt del runner con dpkg -x y empaqueta con appimagetool oficial.
 
 on:
   push:
@@ -47,33 +54,23 @@ jobs:
       - name: Tests de lógica (sin GTK)
         run: python3 -m unittest discover -s tests -v
 
-      # NOTA: el AppImage NO lleva kage dentro (decisión v4). La GUI usa el
-      # kage instalado en el sistema y, si no lo hay, ya ofrece instalarlo
-      # con su diálogo de instalación guiada. Ventajas: workflow más simple
-      # y robusto, AppImage más ligero y kage se actualiza por apt sin
-      # depender de que se recompublique la GUI.
+      # NOTA: el AppImage SÍ lleva kage dentro (decisión de Fabian del
+      # 2026-10-31, que revierte la de la v4): build-appimage.sh descarga
+      # la release oficial de kage, verifica su sha256 y la empaqueta, así
+      # que el ejecutable es autocontenido. La GUI también sigue pudiendo
+      # usar un kage del sistema cuando corre desde el código fuente.
 
-      # appimage-builder va en un venv propio con packaging==21.3 fijado:
-      # compara versiones de paquetes .deb con packaging.version.parse(),
-      # y desde packaging 22 esas versiones (p. ej. "1.21.1ubuntu2") ya no
-      # se aceptan como LegacyVersion: parse() lanza InvalidVersion y el
-      # deploy de apt muere a mitad de camino. Instalado con el pip del
-      # sistema tomaba el packaging moderno del runner (24.x) y reventaba;
-      # en el venv queda aislado con la última versión compatible.
-      - name: Instalar appimage-builder (venv aislado) y appimagetool
+      - name: Instalar appimagetool y utilidades
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-pip python3-setuptools python3-venv patchelf desktop-file-utils wget file libfuse2 xvfb
+          sudo apt-get install -y wget file libfuse2 xvfb
           sudo wget https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O /usr/local/bin/appimagetool
           sudo chmod +x /usr/local/bin/appimagetool
-          python3 -m venv "$HOME/appimage-builder-venv"
-          "$HOME/appimage-builder-venv/bin/pip" install "appimage-builder==1.1.0" "packaging==21.3"
 
       - name: Construir el AppImage
         run: |
-          echo "== MARCADOR workflow v5: appimage-builder en venv con packaging 21.3 =="
-          "$HOME/appimage-builder-venv/bin/python" -c "import packaging; print('packaging en uso:', packaging.__version__)"
-          "$HOME/appimage-builder-venv/bin/appimage-builder" --recipe AppImageBuilder.yml
+          echo "== MARCADOR workflow v6: build manual con build-appimage.sh, SIN appimage-builder =="
+          bash packaging/build-appimage.sh
 
       - name: Smoke test (la ventana debe abrir y quedarse viva)
         run: |
