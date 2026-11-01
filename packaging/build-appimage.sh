@@ -119,6 +119,34 @@ for deb in "$DEBDIR"/*.deb; do dpkg -x "$deb" "$APPDIR"; done
 # Limpiar peso muerto (documentación y manuales no hacen falta a bordo).
 rm -rf "$APPDIR/usr/share/doc" "$APPDIR/usr/share/man" "$APPDIR/usr/share/lintian" || true
 
+# --- 2b. Layout usrmerge + glibc del host (dos fallos reales) ---
+# (a) Algunos .deb (p. ej. libpcre3) instalan en /lib y /bin «a la
+# antigua». En el sistema real /lib -> usr/lib (usrmerge) y todo se ve
+# junto; en el AppDir quedan directorios separados y el loader no
+# encuentra esas librerías (libpcre.so.3 «not found» con el archivo
+# dentro). Se fusionan y se dejan los symlinks como en el sistema.
+for d in lib bin sbin; do
+  if [ -d "$APPDIR/$d" ] && [ ! -L "$APPDIR/$d" ]; then
+    mkdir -p "$APPDIR/usr/$d"
+    cp -a "$APPDIR/$d/." "$APPDIR/usr/$d/"
+    rm -rf "$APPDIR/$d"
+    ln -s "usr/$d" "$APPDIR/$d"
+  fi
+done
+# (b) glibc NO se empaqueta (doctrina AppImage): el ejecutable debe
+# usar la libc del host, emparejada con su ld.so. Mezclar la libc de
+# jammy (2.35) con el ld.so de un sistema más nuevo aborta el proceso
+# (stack smashing). Se borran del AppDir exactamente los archivos que
+# trae el paquete libc6, ni uno más.
+for deb in "$DEBDIR"/libc6_*.deb; do
+  [ -e "$deb" ] || continue
+  mkdir -p "$WORKDIR/libc6-files"
+  dpkg -x "$deb" "$WORKDIR/libc6-files"
+  (cd "$WORKDIR/libc6-files" && find . \( -type f -o -type l \) -print0) |
+    while IFS= read -r -d '' f; do rm -f "$APPDIR/$f"; done
+  rm -rf "$WORKDIR/libc6-files"
+done
+
 # Cachés de iconos (sus rutas son relativas: seguras dentro del AppDir).
 if [ -x "$APPDIR/usr/bin/gtk-update-icon-cache" ]; then
   for theme in hicolor adwaita; do
@@ -160,3 +188,26 @@ chmod +x "$APPDIR/AppRun"
 ARCH="$MULTIARCH" "$APPIMAGETOOL" "$APPDIR" "kage-gui-$VERSION.AppImage"
 ls -lh "kage-gui-$VERSION.AppImage"
 echo "== OK: kage-gui-$VERSION.AppImage =="
+
+# --- 5. Autoprueba del artefacto (si hay Xvfb) ---
+# «El proceso sigue vivo» NO basta como humo: una excepción dentro de
+# on_activate deja el proceso vivo pero SIN ventana (así se coló el
+# fallo de load_from_string en el build10). Aquí se exige además que
+# el log del arranque no traiga ningún Traceback.
+if command -v xvfb-run >/dev/null 2>&1; then
+  echo "== Autoprueba: arranque del AppImage (15 s bajo Xvfb) =="
+  set +e
+  APPIMAGE_EXTRACT_AND_RUN=1 timeout 15 xvfb-run -a "./kage-gui-$VERSION.AppImage" > "$WORKDIR/selftest.log" 2>&1
+  code=$?
+  set -e
+  cat "$WORKDIR/selftest.log"
+  if [ "$code" -ne 124 ]; then
+    echo "ERROR: el AppImage no se mantuvo vivo 15 s (código $code)" >&2
+    exit 1
+  fi
+  if grep -q "Traceback" "$WORKDIR/selftest.log"; then
+    echo "ERROR: el arranque dejó un Traceback (¿la ventana no se creó?)" >&2
+    exit 1
+  fi
+  echo "== Autoprueba OK: vivo y sin Traceback =="
+fi
