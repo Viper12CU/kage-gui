@@ -988,7 +988,14 @@ class MainWindow(Gtk.ApplicationWindow):
         apply_theme(self._cfg["theme"])
 
         provider = Gtk.CssProvider()
-        provider.load_from_string(_CSS)
+        # load_from_string existe desde GTK 4.12; el AppImage empaqueta
+        # GTK 4.6 (Ubuntu 22.04), donde solo está load_from_data. Sin
+        # este rodeo, la ventana moría al construirse dentro del
+        # AppImage (AttributeError) aunque el proceso siguiera vivo.
+        if hasattr(provider, "load_from_string"):
+            provider.load_from_string(_CSS)
+        else:
+            provider.load_from_data(_CSS.encode("utf-8"))
         Gtk.StyleContext.add_provider_for_display(
             Gdk.Display.get_default(), provider,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
